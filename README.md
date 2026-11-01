@@ -1,5 +1,6 @@
-# BroomsedgeResearch
-<h3>Data Explorations for my Masters Thesis Project<h3>
+# Broomsedge Research
+
+<h3>Data Explorations for my Masters Thesis Project</h3>
 
 I will be documenting my progress with data analysis on my thesis project here. All data files to be found in folders. Quarto documents to explain my work.
 
