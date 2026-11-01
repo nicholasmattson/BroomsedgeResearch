@@ -143,7 +143,7 @@ UnderstoryCover_Tally_2010_Raw <- read_csv(here("Data","WideData","UnderstoryCov
 
 head(UnderstoryCover_Tally_2010_Raw)
 #switch rows and columns
-UnderstoryCover_Tally_2010 <- Understory_Plot_Tally_2010_Raw |>
+UnderstoryCover_Tally_2010 <- UnderstoryCover_Tally_2010_Raw |>
   t() |>
   as_tibble(rownames = "Original Headers", .name_repair = "minimal")
 
@@ -160,3 +160,182 @@ UnderstoryCover_Tally_2010_Edited <- UnderstoryCover_Tally_2010_Edited|>
          Year = factor("2010"))|> 
   relocate(Year, .after = 1)
 ```
+
+With both data frames converted to the same wide format, they just need to be pivoted to long format and stitched together so they can be compared in a graph. For this comparison I chose only species that appeared in at least five plots per survey year.
+
+```{r}
+#| label: combined understory cover data
+#| results: hide
+
+#pivot 2026 tally to long data format
+UnderstoryCover_Tally_Long_Edited <- UnderstoryCover_Tally_Edited|>
+  pivot_longer(
+    cols = AndGlo:FesRub,
+    names_to = "Species",
+    values_to = "Abundance")|>
+  #filter out NA
+  filter(!is.na(Abundance))|>
+  group_by(Species)|>
+  #calculate how many plots a species appears in
+  mutate(n_plots = n_distinct(Plot_ID))|>
+  #keeping just species in at least five plots
+  filter(n_plots >= 5)
+
+#output data file
+write_csv(UnderstoryCover_Tally_Long_Edited,file = here("Data","LongData","UnderstoryCover_Tally_Long_Edited.csv"))
+
+#pivot 2010 tally to long data format
+Understory_Tally_Long_Edited_2010 <- UnderstoryCover_Tally_2010_Edited|>
+  pivot_longer(
+    cols = AcaKoa:Log,
+    names_to = "Species",
+    values_to = "Abundance")|>
+  #filter out NA
+  filter(!is.na(Abundance))|>
+  group_by(Species)|>
+  #calculate how many plots a species appears in
+  mutate(n_plots = n_distinct(Plot_ID))|>
+  filter(n_plots >= 5)
+
+#output data file
+write_csv(Understory_Tally_Long_Edited_2010,file = here("Data","LongData","UnderstoryCover_Tally_Long_2010_Edited.csv"))
+
+Understory_Tally_Long_Combined <- bind_rows(Understory_Tally_Long_Edited_2010,UnderstoryCover_Tally_Long_Edited)
+Understory_Tally_Long_Combined
+
+#output data file
+write_csv(Understory_Tally_Long_Combined,file = here("Data","LongData","UnderstoryCover_Tally_Long_Combined.csv"))
+
+
+```
+
+<h3>Part 3: Boxplot Comparisons of Species Cover Across Years</h3>
+
+Now they can be graphed to see if there are trends with species cover in different augmentation and burn number factors.
+
+```{r}
+#| label: Understory box plots by species cover
+#| fig-height: 10
+#| fig-width: 10
+#| message: false
+#| warning: false
+#| results: hide
+
+#boxplots comparing 2010 and 2026
+ggplot(Understory_Tally_Long_Combined,
+       aes(x = Augment,
+           y = Abundance,
+           fill = Year)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  facet_wrap(~ Species, scales = "free_y",axes = "all") +
+  labs(
+    title = "Change from 2010-2026 in Percent Cover",
+    subtitle = "Species found in at least 5 plots",
+    x = "Augmentation",
+    y = "Abundance in Plot"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+
+```
+
+Some quick observations:
+
+- StyTam cover rose across all classes in all years
+
+- DodVis cover higher in plots that were augmented for both 2010 and 2026, but especially the latter
+
+- Leaf Litter much higher in 2010 observations, but I suspect this is due to sampler more than changes to ground cover
+
+- Augmented plots had much more AcaKoa than not augmented plots in 2010. Now they do not.
+
+<h3>Part 4: Comparing Cumulative Cover Types Across Years</h3>
+
+Most cover stats from the 2010 report condense species cover to three main categories (Exotic, Native, No Veg). In order to compare the two, I will condense my 2026 data so it can compiled in one large dataset. Then I can compare the years 2010 and 2016 across these three main cover metrics.
+
+```{r}
+#| label: Understory box plots by cover type
+#| fig-height: 10
+#| fig-width: 10
+#| message: false
+#| warning: false
+#| results: hide
+
+#group existing veg types in raw data into even more simplified groups for comparison
+Understory_Data_byCoverType <- UnderstoryData_Raw %>%
+  group_by(Plot_ID, Point_ID) %>%
+  mutate(
+    temp_cat = case_when(
+      Veg_Type_Repeats %in% c("Native_Woody", "Native_Herbaceous", "Native_Grass") ~ "Native",
+      Veg_Type_Repeats %in% c("Invasive_Woody", "Invasive_Herbaceous", "Invasive_Grass") ~ "Exotic",
+      Veg_Type_Repeats == "Bare_Substrate" ~ "No veg",
+      TRUE ~ NA_character_
+    ),
+    # Check for duplicates of the exact veg type
+    New_Status = if_else(
+      !is.na(temp_cat) & !duplicated(Veg_Type_Repeats), 
+      temp_cat, 
+      NA_character_
+    )
+  ) %>%
+  select(-temp_cat) %>%
+  ungroup()
+
+print(n = 50,Understory_Data_byCoverType)
+
+#convert raw data to percentages
+Understory_Plot_Tally_byCoverType <- Species_Matrix(Understory_Data_byCoverType,taxon_col = "New_Status",output = here("Data","WideData","UnderstoryPlot_Tally_byCoverType.csv"))
+
+Understory_Plot_Tally_byCoverType <- Understory_Plot_Tally_byCoverType|>
+  #divide by total plot points then multiply by 100 for percentage
+  mutate(across(where(is.numeric), ~ (.x / 93) * 100))
+Understory_Plot_Tally_byCoverType
+write_csv(Understory_Plot_Tally_byCoverType,file = here("Data","WideData","UnderstoryPlot_Tally_byCoverType.csv"))
+
+#2026 plot tally combined with 2010 data and re-imported as combined csv
+Understory_Plot_Tally_byCoverType_Combined <- read_csv(here("Data","WideData","UnderstoryPlot_Tally_byCoverType_Combined.csv"))
+
+#pivot data long for graphing
+Understory_Plot_Tally_byCoverType_Combined_Long <- Understory_Plot_Tally_byCoverType_Combined|>
+  pivot_longer(
+    cols = Native:`No veg`,
+    names_to = "Veg_Type",
+    values_to = "Percentages")
+
+#boxplot comparing cover types across years
+Understory_Plot_Tally_byCoverType_Combined_Long$Year <- as.factor(Understory_Plot_Tally_byCoverType_Combined_Long$Year)
+Understory_Plot_Tally_byCoverType_Combined_Long$Times_Burned <- as.factor(Understory_Plot_Tally_byCoverType_Combined_Long$Times_Burned)
+
+ggplot(Understory_Plot_Tally_byCoverType_Combined_Long,
+       aes(x = Augment,
+           y = Percentages,
+           fill = Year)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  facet_wrap(~ Veg_Type) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, by = 10))+
+  labs(
+    title = "Change from 2010-2026",
+    subtitle = "Percent Cover",
+    x = "Augmentation",
+    y = "Abundance in Plot"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+
+```
+
+Initial thoughts:
+
+- Clear difference between surveyors as far as what was marked "No Veg". Will have to ask Sierra at HVNP for her thoughts on how "No Veg" was documented in past survey.
+
+- Higher range for native cover in augmented plots vs. non-augmented in 2010, and similar trend taking place in 2026. I want to dig into this further.
+
+- Higher recorded exotic cover in control plots in 2026 vs 2010. I wonder if this is actual expansion of invasive cover or if surveyor affects results.
