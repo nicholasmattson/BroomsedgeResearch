@@ -1,0 +1,162 @@
+---
+title: "Looking at Understory Data"
+author: "Nick Mattson"
+editor: visual
+format:
+  html:
+    code-fold: true
+    code-summary: "Show code"
+theme: yeti
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: Libraries setup
+#| results: hide
+
+#Load Libraries
+library(tidyverse)
+library(here)
+library(ggplot2)
+library(kableExtra)
+```
+
+<H3>Part 1: Raw Data Structure</H3>
+
+Below is an example table showing my raw understory data structure:
+
+- Plot ID: Unique ID. "UB" for unburned control plots, "BBB" for burn plots not receiving augmentation, and BBN for burn plots receiving augmentation.
+
+- Times Burned: Number of times area burned in recorded times. 1x burn for plots burnt only in 2000. 2x for plots burnt both in 2000 and 1977. 0x for control plots.
+
+- Augmentation: Whether area received post-fire augmentation (true/false condition)
+
+- Species Code: Unique taxon code for each recorded species/bare substrate
+
+- Veg Type: Taxon code classified according to vegetation type (Native woody, invasive woody, invasive grass, etc.). No repeats only logs first occurrence of a species type at a point, so for example if both StyTam and DodVis (both native woody) were recorded at point, only one is logged. This makes classifying plots by veg cover type easier. Veg Type with repeats logs all vegetation recorded by type.
+
+```{r}
+#| label: example dataframe
+#| out-width: "75%"
+#| tbl-cap: Table 1
+
+
+#load in my data
+UnderstoryData_Raw <- read.csv(here("Data","RawData","UnderstoryData_Raw.csv"))
+
+UnderstoryData_Raw_Sample_Table <- UnderstoryData_Raw |>
+  #only 20 rows as example
+  head(20)|>
+  kbl(caption="Example Plot Data Structure",
+      col.names = c("Plot ID", "Times Burned", "Augmentation","Point ID","Species Code","Veg Type (No Repeats)","Veg Type (Repeats"),
+      align = "lcccccc")|>
+  kable_styling(full_width=FALSE)|>
+  row_spec(0,bold=TRUE)|>
+  kable_classic()
+
+UnderstoryData_Raw_Sample_Table
+```
+
+<h3>Part 2: Converting raw data to cumulative tally</h3>
+
+Raw understory files can be fed into a function called "Species Matrix" which tallies the number of times a taxon code was logged on a per-plot basis, then renders a wide-format table with all the tallies.
+
+```{r}
+#| label: example-dataframe-tally
+#| out-width: "75%"
+#| tbl-cap: Table 2
+#| message: false
+#| warning: false
+#| results: asis
+
+#function instructions
+Species_Matrix <-function(data,
+                          output = here("Data","WideData","UnderstoryCover_Tally.csv"),
+                          plot_col = "Plot_ID",
+                          taxon_col = "Taxon_Code"){
+  #columns as symbols
+  plot_col <- ensym(plot_col)
+  taxon_col <- ensym(taxon_col)
+  
+  #summary generation
+  summary_matrix <- data|>
+    #filter any missing records
+    filter(!is.na(!!taxon_col))|>
+    #group by plot and taxon code, then tally
+    group_by(!!plot_col,!!taxon_col)|>
+    summarise(tally = n(),.groups = "drop")|>
+    #pivot data wide
+    pivot_wider(names_from = !!taxon_col,
+                values_from = tally)
+  
+  #export dataframe as csv
+  write_csv(summary_matrix, output)
+  
+  message("Species tally matrix successfully saved to: ", output)
+  return(summary_matrix)
+}
+
+#running the function
+UnderstoryCover_Tally <- Species_Matrix(data = UnderstoryData_Raw)
+
+#example of dataframe rendered by function
+UnderstoryCover_Tally[, 1:10] |>
+  #only 10 rows as example
+  head(10)|>
+  kbl(caption="Example Understory Plot Tally",
+      col.names = c("Plot ID", "AndGlo", "AndVir","AruBam","BareSoil","DodVis","HypRad","MetPol","MorGah","PteAqu"),
+      align = "lccccccccc")|>
+  kable_styling(full_width=FALSE)|>
+  row_spec(0,bold=TRUE)|>
+  kable_classic()
+```
+
+I then edited the output document in Google Sheets to re-add columns for "Times Burned" and "Augment". I save the output as "UnderstoryCover_Tally_Edited.csv" in my wide data format. At this point I want to compare species cover from this data to the 2010 data. This will require me to standardize by converting all raw tallies to percentages (since I read 93 points per plot and the 2010 study read 100 points per plot).
+
+```{r}
+#| label: Converting tally data for graphing
+#| results: hide
+
+#read csv
+UnderstoryCover_Tally_Edited <- read_csv(here("Data","WideData","UnderstoryCover_Tally_Edited.csv"))
+UnderstoryCover_Tally_Edited$Times_Burned <- as.factor(UnderstoryCover_Tally_Edited$Times_Burned)
+head(UnderstoryCover_Tally_Edited)
+
+#take edited tally, divide by 93, then
+UnderstoryCover_Tally_Edited <- UnderstoryCover_Tally_Edited|>
+  mutate(across(where(is.numeric), ~ .x / 93),
+         #add year for new data
+         Year = factor("2026"))|> 
+  relocate(Year, .after = 1)
+
+```
+
+I then need to convert the old 2010 data to a format where I can compare the two years. The 2010 data has plots as columns and species as rows, so I will flip them with the transpose tool.
+
+```{r}
+#| label: 2010 understory data manipulation
+#| results: hide
+
+UnderstoryCover_Tally_2010_Raw <- read_csv(here("Data","WideData","UnderstoryCover_Tally_2010_Raw.csv"))
+
+head(UnderstoryCover_Tally_2010_Raw)
+#switch rows and columns
+UnderstoryCover_Tally_2010 <- Understory_Plot_Tally_2010_Raw |>
+  t() |>
+  as_tibble(rownames = "Original Headers", .name_repair = "minimal")
+
+#output is cleaned in sheets and re-imported as "UnderstoryCover_Tally_2010_Edited.csv"
+UnderstoryCover_Tally_2010_Edited <- read_csv(here("Data","WideData","UnderstoryCover_Tally_2010_Edited.csv"))
+#convert factors
+UnderstoryCover_Tally_2010_Edited$Times_Burned <- as.factor(UnderstoryCover_Tally_2010_Edited$Times_Burned)
+UnderstoryCover_Tally_2010_Edited$Augment <- as.factor(UnderstoryCover_Tally_2010_Edited$Augment)
+#data check
+head(UnderstoryCover_Tally_2010_Edited)
+
+UnderstoryCover_Tally_2010_Edited <- UnderstoryCover_Tally_2010_Edited|>
+  mutate(across(where(is.numeric), ~ .x / 100),
+         Year = factor("2010"))|> 
+  relocate(Year, .after = 1)
+```
