@@ -1,0 +1,349 @@
+---
+title: "Looking at Overstory Data"
+author: "Nick Mattson"
+editor: visual
+format:
+  html:
+    code-fold: true
+    code-summary: "Show code"
+theme: yeti
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: Libraries setup
+#| results: hide
+
+#Load Libraries
+library(tidyverse)
+library(here)
+library(ggplot2)
+library(kableExtra)
+```
+
+My overstory data was taken at the same time that understory data was collected. The methodology for collecting this data follows the same principle as point-intercept understory data. Any vegetation 2m or below intercepting the pole was classified as understory, while vegetation greater than 2m for canopy species (MetPol, AcaKoa, SopChr, and MyrFay) was classified as overstory. Any point without overstory was marked as NoCan (no canopy).
+
+The same function that read the understory data and compiled it into a wide tally can also be used to translate the raw overstory data.
+
+```{r}
+#| label: Overstory percentage by Augment Type
+#| results: hide
+#| fig-size: "150%"
+
+#Species Matrix function
+Species_Matrix <-function(data,
+                          output = here("Data","WideData","UnderstoryCover_Tally.csv"),
+                          plot_col = "Plot_ID",
+                          taxon_col = "Taxon_Code"){
+  #columns as symbols
+  plot_col <- ensym(plot_col)
+  taxon_col <- ensym(taxon_col)
+  
+  #summary generation
+  summary_matrix <- data|>
+    #filter any missing records
+    filter(!is.na(!!taxon_col))|>
+    #group by plot and taxon code, then tally
+    group_by(!!plot_col,!!taxon_col)|>
+    summarise(tally = n(),.groups = "drop")|>
+    #pivot data wide
+    pivot_wider(names_from = !!taxon_col,
+                values_from = tally)
+  
+  #export dataframe as csv
+  write_csv(summary_matrix, output)
+  
+  message("Species tally matrix successfully saved to: ", output)
+  return(summary_matrix)
+}
+
+
+#read in raw overstory data
+OverstoryData_Raw <- read.csv(here("Data","RawData","OverstoryData_Raw.csv"))
+head(OverstoryData_Raw)
+
+
+#create grouping labels for overstory raw data
+Overstory_Data_byCoverType <- OverstoryData_Raw %>%
+  group_by(Plot_ID, Point_ID) %>%
+  mutate(
+    temp_cat = case_when(
+      Veg_Type_Repeats %in% "Native_Can" ~ "Native Canopy",
+      Veg_Type_Repeats %in% "Invasive_Can" ~ "Exotic",
+      Veg_Type_Repeats == "No_Canopy" ~ "No Canopy",
+      TRUE ~ NA_character_
+    ),
+    # Check for duplicates of the exact veg type
+    New_Status = if_else(
+      !is.na(temp_cat) & !duplicated(Veg_Type_Repeats), 
+      temp_cat, 
+      NA_character_
+    )
+  ) %>%
+  select(-temp_cat) %>%
+  ungroup()
+
+#convert raw data to tally using Species_Matrix function
+Overstory_Plot_Tally_byCoverType <- Species_Matrix(Overstory_Data_byCoverType,taxon_col = "New_Status",output = here("Data","WideData","OverstoryPlot_Tally_byCoverType.csv"))
+head(Overstory_Plot_Tally_byCoverType)
+
+#convert tally to percentages
+Overstory_Plot_Tally_byCoverType <- Overstory_Plot_Tally_byCoverType|>
+  #divide by total plot points then multiply by 100 for percentage
+  mutate(across(where(is.numeric), ~ (.x / 93) * 100))
+write_csv(Overstory_Plot_Tally_byCoverType,file = here("Data","WideData","OverstoryPlot_Tally_byCoverType.csv"))
+  
+#pivot long for graphing, replace NA with 0
+Overstory_Plot_Tally_byCoverType_Long <- Overstory_Plot_Tally_byCoverType|>
+  pivot_longer(
+    cols = `Native Canopy`:Exotic,
+    names_to = "Canopy_Type",
+    values_to = "Percentages")|>
+  mutate(across(where(is.numeric), ~replace_na(., 0)))|>
+#add grouping columns
+mutate(
+  # Extract the number from Plot_ID for BBB/BBN plots
+  plot_num = parse_number(Plot_ID),
+  # Assign Times_Burned based on prefix and number
+  Times_Burned = case_when(
+    str_starts(Plot_ID, "UB") ~ 0,
+    str_starts(Plot_ID, "BBB|BBN") & plot_num %in% 1:10 ~ 1,
+    str_starts(Plot_ID, "BBB|BBN") & plot_num %in% 11:20 ~ 2,
+    TRUE ~ NA_real_
+  ),
+  Augment = case_when(
+    str_starts(Plot_ID, "UB") ~ "Control",
+    str_starts(Plot_ID, "BBB") ~ "No",
+    str_starts(Plot_ID, "BBN") ~ "Yes",
+    TRUE ~ NA_character_
+  )
+) |>
+  select(-plot_num)
+head(Overstory_Plot_Tally_byCoverType_Long)
+
+#ggplot boxplot
+ggplot(Overstory_Plot_Tally_byCoverType_Long,
+       aes(x = Augment,
+           y = Percentages)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  facet_wrap(~ Canopy_Type) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, by = 10))+
+  labs(
+    title = "Canopy Plot Percentage by Augment Type",
+    subtitle = "Shown in Plot Percent Cover",
+    x = "Augmentation",
+    y = "Percentage Cover in Plot"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+On the whole, canopy is sparse for nearly all sites. Perhaps a better way to visualize the data would be to compare the percentages of the three most common canopy species (MetPol, AcaKoa, MyrFay) across the different Augmentation classes.
+
+```{r}
+#| label: Overstory species percentages by augmentation status
+#| results: hide
+#| fig-size: "150%"
+
+Overstory_Plot_Tally <- Species_Matrix(OverstoryData_Raw,output = here("Data","WideData","OverstoryPlot_Tally.csv"))
+
+#pivot data long, add grouping variables
+Overstory_Plot_Tally_Long <- Overstory_Plot_Tally|>
+  mutate(across(where(is.numeric), ~ (.x / 93) * 100))|>
+  pivot_longer(
+    cols = MetPolCan:SopChrCan,
+    names_to = "Canopy_Species",
+    values_to = "Percentages")|>
+  mutate(across(where(is.numeric), ~replace_na(., 0)))|>
+  mutate(
+    # Extract the number from Plot_ID for BBB/BBN plots
+    plot_num = parse_number(Plot_ID),
+    # Assign Times_Burned based on prefix and number
+    Times_Burned = case_when(
+      str_starts(Plot_ID, "UB") ~ 0,
+      str_starts(Plot_ID, "BBB|BBN") & plot_num %in% 1:10 ~ 1,
+      str_starts(Plot_ID, "BBB|BBN") & plot_num %in% 11:20 ~ 2,
+      TRUE ~ NA_real_
+    ),
+    Augment = case_when(
+      str_starts(Plot_ID, "UB") ~ "Control",
+      str_starts(Plot_ID, "BBB") ~ "No",
+      str_starts(Plot_ID, "BBN") ~ "Yes",
+      TRUE ~ NA_character_
+    )
+  )|>
+  select(-plot_num)|>
+  #remove NoCan and SopChrCan to only show three main canopy species
+  filter(!Canopy_Species %in% c("NoCan", "SopChrCan"))
+
+#visualize as ggplot
+ggplot(Overstory_Plot_Tally_Long,
+       aes(x = Augment,
+           y = Percentages)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  facet_wrap(~ Canopy_Species,scales = "free_y") +
+  labs(
+    title = "Canopy Species Percentage by Augment Type",
+    subtitle = "Shown in Plot Percent Cover",
+    x = "Taxon Code",
+    y = "Percentage Cover in Plot"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+I also developed a function called Shady, which evaluates all unique plot points which contain overstory. The function identifies whether a given plot point has overstory presence, then creates a list of all the understory species found below. This allows me to analyze the composition of shaded understory vs. exposed understory. One of my hypotheses was that native cover proportion would be higher under canopy, where light levels and leaf litter may suppress the growth of invasive grasses.
+
+```{r}
+#| label: Shady function
+#| results: hide
+
+Shady <- function(understory_data,
+                  overstory_data,
+                  overstory_column = Taxon_Code,
+                  exclude = "NoCan",
+                  include = NULL,
+                  file_path = NULL) {
+  
+  if (!is.null(include)) {
+    overstory_points <- overstory_data |>
+      filter({{ overstory_column }} %in% include) |>
+      select(Plot_ID, Point_ID) |>
+      distinct()
+  } else {
+    overstory_points <- overstory_data |>
+      filter(!({{ overstory_column }} %in% exclude)) |>
+      select(Plot_ID, Point_ID) |>
+      distinct()
+  }
+  
+  understory_points <- understory_data |>
+    inner_join(overstory_points, by = c("Plot_ID", "Point_ID"))
+  
+  if (!is.null(file_path)) {
+    write_csv(understory_points, file_path)
+  }
+  
+  return(understory_points)
+}
+
+
+#dividing all canopy types
+Understory_Below_Canopy_all <- Shady(UnderstoryData_Raw,OverstoryData_Raw,file_path=here("Data","RawData","Understory_Below_Canopy_all.csv"))
+
+Understory_No_Canopy_all <- Shady(UnderstoryData_Raw,OverstoryData_Raw,include = "NoCan",file_path = here("Data","RawData","Understory_No_Canopy_all.csv"))
+
+Understory_Native_Canopy_all <- Shady(UnderstoryData_Raw,OverstoryData_Raw,exclude = c("NoCan","MyrFayCan"),file_path = here("Data","RawData","Understory_No_Canopy_all.csv"))
+
+Understory_Below_MetPol <- Shady(UnderstoryData_Raw,OverstoryData_Raw,include = "MetPolCan",file_path = here("Data","RawData","Understory_Below_MetPol.csv"))
+
+Understory_Below_AcaKoa <- Shady(UnderstoryData_Raw,OverstoryData_Raw,include = "AcaKoaCan",file_path = here("Data","RawData","Understory_Below_AcaKoa.csv"))
+
+Understory_Below_MyrFay <- Shady(UnderstoryData_Raw,OverstoryData_Raw,include = "MyrFayCan",file_path = here("Data","RawData","Understory_Below_MyrFay.csv"))
+
+#visualizing most common species under different canopy types
+
+#all canopy
+Understory_Below_Canopy_all |>
+  count(Taxon_Code, sort = TRUE) |>
+  slice_max(n, n = 10, with_ties = FALSE) |>
+  { \(df)
+    ggplot(df, aes(x = reorder(Taxon_Code, -n), y = n)) +
+      geom_col() +
+      labs(
+        title = "Top 10 Most Frequent Understory Taxa-All Canopy",
+        subtitle = paste("n =", nrow(Understory_Below_Canopy_all)),
+        x = "Taxon Code",
+        y = "Count"
+      ) +
+      theme_minimal()
+  }()
+
+#no canopy
+Understory_No_Canopy_all |>
+  count(Taxon_Code, sort = TRUE) |>
+  slice_max(n, n = 10, with_ties = FALSE) |>
+  { \(df)
+    ggplot(df, aes(x = reorder(Taxon_Code, -n), y = n)) +
+      geom_col() +
+      labs(
+        title = "Top 10 Most Frequent Understory Taxa-No Canopy",
+        subtitle = paste("n =", nrow(Understory_No_Canopy_all)),
+        x = "Taxon Code",
+        y = "Count"
+      ) +
+      theme_minimal()
+  }()
+
+#under native canopy
+Understory_Native_Canopy_all |>
+  count(Taxon_Code, sort = TRUE) |>
+  slice_max(n, n = 10, with_ties = FALSE) |>
+  { \(df)
+    ggplot(df, aes(x = reorder(Taxon_Code, -n), y = n)) +
+      geom_col() +
+      labs(
+        title = "Top 10 Most Frequent Understory Taxa-Native Canopy",
+        subtitle = paste("n =", nrow(Understory_Native_Canopy_all)),
+        x = "Taxon Code",
+        y = "Count"
+      ) +
+      theme_minimal()
+  }()
+#under ohia canopy
+Understory_Below_MetPol |>
+  count(Taxon_Code, sort = TRUE) |>
+  slice_max(n, n = 10, with_ties = FALSE) |>
+  { \(df)
+    ggplot(df, aes(x = reorder(Taxon_Code, -n), y = n)) +
+      geom_col() +
+      labs(
+        title = "Top 10 Most Frequent Understory Taxa-MetPol",
+        subtitle = paste("n =", nrow(Understory_Below_MetPol)),
+        x = "Taxon Code",
+        y = "Count"
+      ) +
+      theme_minimal()
+  }()
+
+Understory_Below_AcaKoa |>
+  count(Taxon_Code, sort = TRUE) |>
+  slice_max(n, n = 10, with_ties = FALSE) |>
+  { \(df)
+    ggplot(df, aes(x = reorder(Taxon_Code, -n), y = n)) +
+      geom_col() +
+      labs(
+        title = "Top 10 Most Frequent Understory Taxa-AcaKoa",
+        subtitle = paste("n =", nrow(Understory_Below_AcaKoa)),
+        x = "Taxon Code",
+        y = "Count"
+      ) +
+      theme_minimal()
+  }()
+
+Understory_Below_MyrFay |>
+  count(Taxon_Code, sort = TRUE) |>
+  slice_max(n, n = 10, with_ties = FALSE) |>
+  { \(df)
+    ggplot(df, aes(x = reorder(Taxon_Code, -n), y = n)) +
+      geom_col() +
+      labs(
+        title = "Top 10 Most Frequent Understory Taxa-MyrFay",
+        subtitle = paste("n =", nrow(Understory_Below_MyrFay)),
+        x = "Taxon Code",
+        y = "Count"
+      ) +
+      theme_minimal()
+  }()
+
+```

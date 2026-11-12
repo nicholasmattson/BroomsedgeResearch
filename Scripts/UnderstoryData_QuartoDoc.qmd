@@ -21,6 +21,7 @@ library(tidyverse)
 library(here)
 library(ggplot2)
 library(kableExtra)
+library(janitor)
 ```
 
 <H3>Part 1: Raw Data Structure</H3>
@@ -113,7 +114,7 @@ UnderstoryCover_Tally[, 1:10] |>
   kable_classic()
 ```
 
-I then edited the output document in Google Sheets to re-add columns for "Times Burned" and "Augment". I save the output as "UnderstoryCover_Tally_Edited.csv" in my wide data format. At this point I want to compare species cover from this data to the 2010 data. This will require me to standardize by converting all raw tallies to percentages (since I read 93 points per plot and the 2010 study read 100 points per plot).
+I then edited the output document in Google Sheets to re-add columns for "Times Burned" and "Augment". I save the output as "UnderstoryCover_Tally_Edited.csv" in my wide data format. At this point I want to compare species cover from this data to the 2001 and 2010 data. This will require me to standardize by converting all raw tallies to percentages (since I read 93 points per plot and the 2001/2010 study read 100 points per plot).
 
 ```{r}
 #| label: Converting tally data for graphing
@@ -133,13 +134,15 @@ UnderstoryCover_Tally_Edited <- UnderstoryCover_Tally_Edited|>
 
 ```
 
-I then need to convert the old 2010 data to a format where I can compare the two years. The 2010 data has plots as columns and species as rows, so I will flip them with the transpose tool.
+I then need to convert the old 2001 and 2010 data to a format where I can compare the two years. Both data have plots as columns and species as rows, so I will flip them with the transpose tool.
 
 ```{r}
 #| label: 2010 understory data manipulation
 #| results: hide
 
 UnderstoryCover_Tally_2010_Raw <- read_csv(here("Data","WideData","UnderstoryCover_Tally_2010_Raw.csv"))
+
+
 
 head(UnderstoryCover_Tally_2010_Raw)
 #switch rows and columns
@@ -339,3 +342,152 @@ Initial thoughts:
 - Higher range for native cover in augmented plots vs. non-augmented in 2010, and similar trend taking place in 2026. I want to dig into this further.
 
 - Higher recorded exotic cover in control plots in 2026 vs 2010. I wonder if this is actual expansion of invasive cover or if surveyor affects results.
+
+Another visual breaks the grouping factors into more vegetation subclass types.
+
+```{r}
+#| label: Understory box plots by subcover type
+#| fig-height: 10
+#| fig-width: 10
+#| message: false
+#| warning: false
+#| results: hide
+
+Understory_bySubCoverType_2026 <- Species_Matrix(UnderstoryData_Raw,taxon_col = "Veg_Type_No_Repeats",output = here("Data","WideData","UnderstoryPlot_Tally_bySubCoverType.csv"))|>
+  mutate(No_Veg = rowSums(across(c(Bare_Substrate, Leaf_Litter)
+                                 ), na.rm = TRUE),
+         Year = factor(2026),
+         (across(where(is.numeric), ~ (.x / 93) * 100))
+         )|>
+  select(-c(Bare_Substrate, Leaf_Litter, Unresolved, Lichen))|>
+  select(
+    Plot_ID,
+    Year,
+    Native_Woody,
+    Invasive_Woody,
+    Native_Herbaceous,
+    Invasive_Herbaceous,
+    Native_Grass,
+    Invasive_Grass,
+    No_Veg
+  )
+
+#2010 data transposed and readied for binding
+library(tidyverse)
+library(here)
+
+Understory_bySubCoverType_2010 <- read_csv(here("Data", "WideData", "Understory_SubCover_Dataframe.csv")) |>
+  t() |>
+  as_tibble(rownames = "Plot_ID", .name_repair = "minimal") |>
+  set_names(c(
+    "Plot_ID",
+    "Native_Woody",
+    "Invasive_Woody",
+    "Native_Herbaceous",
+    "Invasive_Herbaceous",
+    "Native_Grass",
+    "Invasive_Grass",
+    "No_Veg"
+  ))|>
+  mutate(Year = factor(2010)) |>
+  relocate(Year, .after = 1)
+
+Understory_bySubCoverType_2010 <- Understory_bySubCoverType_2010|>
+  mutate(across(-c(Plot_ID, Year), as.numeric))
+
+Understory_bySubCoverType_Combined <- bind_rows(Understory_bySubCoverType_2010, Understory_bySubCoverType_2026)
+
+#Add grouping variables
+Understory_bySubCoverType_Combined <- Understory_bySubCoverType_Combined|>
+  mutate(
+    # Extract the number from Plot_ID for BBB/BBN plots
+    plot_num = parse_number(Plot_ID),
+    # Assign Times_Burned based on prefix and number
+    Times_Burned = case_when(
+      str_starts(Plot_ID, "UB") ~ 0,
+      str_starts(Plot_ID, "BBB|BBN") & plot_num %in% 1:10 ~ 1,
+      str_starts(Plot_ID, "BBB|BBN") & plot_num %in% 11:20 ~ 2,
+      TRUE ~ NA_real_
+    ),
+    Augment = case_when(
+      str_starts(Plot_ID, "UB") ~ "Control",
+      str_starts(Plot_ID, "BBB") ~ "No",
+      str_starts(Plot_ID, "BBN") ~ "Yes",
+      TRUE ~ NA_character_
+    )
+  )|>
+  select(-plot_num)|>
+  #long pivot for graphing
+  pivot_longer(
+    cols = Native_Woody:No_Veg,
+    names_to = "Veg_SubType",
+    values_to = "Percentages")
+  
+
+#Plotted
+ggplot(Understory_bySubCoverType_Combined,
+       aes(x = Augment,
+           y = Percentages,
+           fill = Year)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  facet_wrap(~ Veg_SubType) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, by = 10))+
+  labs(
+    title = "Change from 2010-2026 by Veg SubType",
+    subtitle = "Percent Cover",
+    x = "Augmentation",
+    y = "Abundance in Plot"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+Limited data exists for 2001 cover, taken immediately after the burn. In that observation, only plots 1-10 of both the augmented and non-augmented treatments was read, along with the unburned control plots. To visualize this, I added the 2001 cover data to the combined 2010-2016 dataset, and removed plots 11-20 from the analysis to be able to directly compare plots over time.
+
+```{r}
+UnderstoryPlot_Tally_byCoverType_Combined_AllYears <- read_csv(
+  here("Data", "WideData", "UnderstoryPlot_Tally_byCoverType_Combined_AllYears.csv"))
+
+#remove plots that weren't read in 2001, then pivot long
+UnderstoryPlot_Tally_byCoverType_Combined_AllYears <- UnderstoryPlot_Tally_byCoverType_Combined_AllYears |>
+  filter(Times_Burned != 2)|>
+  pivot_longer(
+    cols = Native:`No veg`,
+    names_to = "Veg_Type",
+    values_to = "Percentages")|>
+  #change grouping variables to factors
+  mutate(
+    Augment = as.factor(Augment),
+    Times_Burned = as.factor(Times_Burned),
+    Year = as.factor(Year)
+  )
+
+##boxplot visualization
+ggplot(UnderstoryPlot_Tally_byCoverType_Combined_AllYears,
+       aes(x = Augment,
+           y = Percentages,
+           fill = Year)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  facet_wrap(~ Veg_Type) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, by = 10))+
+  labs(
+    title = "Change from 2001-2010-2026",
+    subtitle = "Percent Cover",
+    x = "Augmentation",
+    y = "Abundance in Plot"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold")
+  )
+#ensure grouping variables are factors
+
+```
